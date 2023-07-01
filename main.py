@@ -35,16 +35,6 @@ def setup():
 
     return chain
 
-def get_output_parser():
-    response_schemas = [
-        ResponseSchema(name="response", description="bot's response to the user's input. Call out if any information is missing."),
-        ResponseSchema(name="instrument", description="instrument the user plays"),
-        ResponseSchema(name="position", description="desired position"),
-        ResponseSchema(name="location", description="user's location"),
-        ResponseSchema(name="side_gigs", description="whether the user is looking for side gigs", type="boolean"),
-    ]
-    output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
-    return output_parser
 
 def get_preference_prompt(output_parser, user_input):
     format_instructions = output_parser.get_format_instructions()
@@ -57,57 +47,76 @@ def get_preference_prompt(output_parser, user_input):
     processed_input = prompt.format_prompt(user_info=user_input)
     return processed_input.to_string()
 
-def step_1(chain):
-    # Display chat
-    if st.session_state["bot_messages"]:
-        for i in reversed(range(len(st.session_state["bot_messages"]) -1, -1, -1)):
-            message(st.session_state["user_messages"][i], is_user=True, key=str(i) + "_user")
+def dislay_chat():
+    max_count = max(len(st.session_state["bot_messages"]), len(st.session_state["user_messages"]))
+    for i in reversed(range(max_count-1, -1, -1)):
+        if i < len(st.session_state["bot_messages"]):
             message(st.session_state["bot_messages"][i], key=str(i))
+        if i < len(st.session_state["user_messages"]):
+            message(st.session_state["user_messages"][i], is_user=True, key=str(i) + "_user")     
 
-    def missing_information(user_data):
-        # Check for any empty fields
+def step_1(chain):
+    def missing_information(user_data, response_schemas):
+        # Check for any key missing from user_data that is required by the response schemas
         missing_keys = []
-        for key, value in user_data.items():
-            if not value:
-                missing_keys.append(key)
-            
+        for schema in response_schemas:
+            if schema.name == "response":
+                continue
+            if schema.name not in user_data or user_data[schema.name] == "":
+                missing_keys.append(schema.name)
         return missing_keys
     
-    st.session_state.bot_messages.append("Welcome to the Orchestra Search Demo! Please enter some information about your job search.")
-    chat_value =  "I am a violinist from Minneapolis, looking for an assistant concertmaster position anywhere in the US. I'm also looking for side gigs in regional orchestras."
-    missing_keys = missing_information(st.session_state.user_data)
+    response_schemas = [
+        ResponseSchema(name="response", description="bot's response to the user's input. Call out if any information is missing."),
+        ResponseSchema(name="instrument", description="instrument the user plays"),
+        ResponseSchema(name="position", description="desired position"),
+        ResponseSchema(name="location", description="user's location"),
+        ResponseSchema(name="side_gigs", description="whether the user is looking for side gigs", type="boolean"),
+    ]
+    output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
+        
+    def submit_message():
+        if user_input:
+            # Get input template
+            processed_input = get_preference_prompt(output_parser, user_input)
+            
+            # Run inference
+            output = chain.run(input=processed_input)            
 
-    while len(missing_keys) > 0:
-        user_input = st.text_area(
-            label = "Your response: ", 
-            value = chat_value, 
-            key = "input"
-        )
-        def submit_message():
-            if user_input:
-                # Get input template
-                output_parser = get_output_parser()
-                processed_input = get_preference_prompt(output_parser, user_input)
-                
-                # Run inference
-                output = chain.run(input=processed_input)            
+            # Add messages for display
+            st.session_state.user_messages.append(user_input)
 
-                # Add messages for display
-                st.session_state.user_messages.append(user_input)
+            # Process output into a structured format
+            parsed_output = output_parser.parse(output)
+            response = parsed_output.pop('response')
 
-                # Process output into a structured format
-                parsed_output = output_parser.parse(output)
-                response = parsed_output.pop('response')
+            # Pop any empty strings
+            parsed_output = {k: v for k, v in parsed_output.items() if v != ""}
+            st.session_state.user_data.update(parsed_output)
+            st.session_state.bot_messages.append(response)
 
-                st.session_state.user_data.update(parsed_output)
-                st.session_state.bot_messages.append(response)
+            missing_keys = missing_information(st.session_state.user_data, response_schemas)
+            if missing_keys:
+                missing_str = ", ".join(missing_keys)
+                st.session_state.bot_messages.append(f"Could you also provide information for: {missing_str}?")
+            else:
+                st.session_state.step = 2
+            
+            # Clear input
+            st.session_state.input = ""
 
-                if len(missing_information(st.session_state.user_data)) > 0:
-                    chat_value = "Please enter your " + ", ".join(missing_keys) + "."
+    # UI
+    if len(st.session_state["bot_messages"]) == 0:
+        st.session_state.bot_messages.append("Welcome to the Orchestra Search Demo! Please enter some information about your job search.")
 
-        st.button("Submit information", on_click=submit_message)
-       
-    st.session_state.step = 2
+    dislay_chat()
+    user_input = st.text_area(
+        label = "Your response: ", 
+        value = "", 
+        placeholder = "I am a violinist from Minneapolis, looking for an assistant concertmaster position anywhere in the US. I'm also looking for side gigs in regional orchestras.",
+        key = "input"
+    )
+    st.button("Submit information", on_click=submit_message)
        
 
 def step_2(chain):
