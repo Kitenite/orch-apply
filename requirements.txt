@@ -1,0 +1,4 @@
+langchain[all]
+google-search-results
+python-dotenv
+streamlit-chat
